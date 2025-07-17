@@ -193,3 +193,116 @@ This means I should be able to access it via a web browser via: **http://192.168
 This brought me to the welcome to nginx default page, so it worked!!!
 
 Next thing to try: using multiple nodes via bare metal and or via Proxmox.
+
+
+I decided to add a worker node to my cluster. 
+
+I booted up the PC with the Talos ISO on a USB flash drive, and just like before, it booted into Maintenance mode, and it obtained the IP address 192.168.2.225.
+
+So first, I needed to know what the Disk Drive was, so I ran the following:
+
+```bash
+talosctl -n 192.168.2.223 get disks --insecure
+```
+I added the **--unsecure** since the PC was in Maintenance mode
+
+It returned the following:
+
+```bash
+NODE   NAMESPACE   TYPE   ID      VERSION   SIZE     READ ONLY   TRANSPORT   ROTATIONAL   WWID                   MODEL              SERIAL
+       runtime     Disk   loop0   2         4.1 kB   true
+       runtime     Disk   loop1   2         77 MB    true
+       runtime     Disk   sda     2         32 GB    false       usb         true                                USB Flash Disk
+       runtime     Disk   sdb     2         500 GB   false       sata        true         naa.5000c5006445b1c5   ST500DM002-1BD14
+       runtime     Disk   sr0     2         0 B      false       sata                                            DVD-RAM SW820
+```
+
+I see that the disk to use is sdb. So I will need to update the worker.yaml file with the /dev/sdb. I used the same steps as before.
+
+After updating the worker.yaml file, I send the config via the following:
+
+```bash
+talosctl apply-config --nodes 192.168.2.225 --insecure --file worker.yaml
+```
+The new worker node was installed, configured, and rebooted, and I now have a second worker in my Cluster, as both the control plane and worker node now show two machines in the cluster.
+
+I also checked this via the following:
+
+```bash
+kubectl get nodes
+```
+This showed both nodes **talos-fdi-sxc** is the first node I setup and **talos-b8t-hi1** is the new worker node:
+
+```bash
+NAME            STATUS   ROLES           AGE     VERSION
+talos-b8t-hi1   Ready    <none>          96s     v1.33.2
+talos-fdi-sxc   Ready    control-plane   6d10h   v1.33.2
+```
+
+Now, to keep things simple, I will increase the number of replicas from one to three for the nginx-demo. I did that via the following:
+
+```bash
+kubectl scale deployment nginx-demo --replicas=3
+```
+
+It came back saying:
+
+```bash
+deployment.apps/nginx-demo scaled
+```
+
+To confirm this, I ran the following:
+
+```bash
+kubectl get pods -o wide
+```
+It showed the following list:
+
+```bash
+NAME                         READY   STATUS              RESTARTS   AGE     IP           NODE            NOMINATED NODE   READINESS GATES
+nginx-demo-87cd4cbb7-625hq   0/1     Completed           0          5d23h   <none>       talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-7jc2g   0/1     Completed           0          6d10h   <none>       talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-n9nmw   0/1     ContainerCreating   0          10s     <none>       talos-b8t-hi1   <none>           <none>
+nginx-demo-87cd4cbb7-q7wmh   1/1     Running             0          17h     10.244.0.8   talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-xhrzn   0/1     ContainerCreating   0          10s     <none>       talos-b8t-hi1   <none>           <none>
+```
+
+I looked under the NODE column and saw two different Host names **talos-fdi-sxc**, which is the first node I created and **talos-b8t-hi1**, which is the new worker node. So, from what I see, the new worker node was creating two more nginx-demos. 
+
+I waited a bit and re-ran the get pods and saw all three were up and running:
+
+```bash
+NAME                         READY   STATUS      RESTARTS   AGE     IP           NODE            NOMINATED NODE   READINESS GATES
+nginx-demo-87cd4cbb7-625hq   0/1     Completed   0          5d23h   <none>       talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-7jc2g   0/1     Completed   0          6d10h   <none>       talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-n9nmw   1/1     Running     0          21s     10.244.1.2   talos-b8t-hi1   <none>           <none>
+nginx-demo-87cd4cbb7-q7wmh   1/1     Running     0          17h     10.244.0.8   talos-fdi-sxc   <none>           <none>
+nginx-demo-87cd4cbb7-xhrzn   1/1     Running     0          21s     10.244.1.3   talos-b8t-hi1   <none>           <none>
+```
+Success!
+
+Controlplane's Dashboard:
+
+```bash
+talos-fdi-sxc (v1.10.5): uptime 1h18m34s, 4x798MHz, 7.6 GiB RAM, PROCS 41, CPU 5.1%, RAM 10.1%
+
+ UUID       edf48532-bc30-604f-8de4-6f8f5ffff493                               TYPE               controlplane                     HOST         talos-fdi-sxc
+ CLUSTER    rattcluster (2 machines)                                           KUBERNETES         v1.33.2                          IP           192.168.2.223/24
+ SIDEROLINK n/a                                                                KUBELET            √ Healthy                        GW           192.168.2.1
+ STAGE      √ Running                                                          APISERVER          √ Healthy                        CONNECTIVITY √ OK
+ READY      √ True                                                             CONTROLLER-MANAGER √ Healthy                        DNS          192.168.2.1, 207.164.234.193
+ SECUREBOOT × False                                                            SCHEDULER          √ Healthy                        NTP          time.cloudflare.com
+```
+
+ Worker's Dashboard:
+
+```bash
+ talos-b8t-hi1 (v1.10.5): uptime 1h15m9s, 4x1.6GHz, 3.7 GiB RAM, PROCS 29, CPU 1.3%, RAM 10.0%
+
+ UUID       3acf3780-f500-11e2-b4fb-7446a0983f9b                               TYPE       worker                                   HOST         talos-b8t-hi1
+ CLUSTER    rattcluster (2 machines)                                           KUBERNETES v1.33.2                                  IP           192.168.2.225/24
+ SIDEROLINK n/a                                                                KUBELET    √ Healthy                                GW           192.168.2.1
+ STAGE      √ Running                                                                                                              CONNECTIVITY √ OK
+ READY      √ True                                                                                                                 DNS          192.168.2.1, 207.164.234.193
+ SECUREBOOT × False                                                                                                                NTP          time.cloudflare.com
+```
